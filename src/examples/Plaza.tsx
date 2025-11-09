@@ -6,9 +6,8 @@ import {
   MotionValue,
   useSpring,
 } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
-// 画布参数
 const COLS = 10,
   ROWS = 10,
   CARD = 100,
@@ -19,17 +18,63 @@ const viewportW = 300,
 const contentW = COLS * CARD + (COLS - 1) * GAP + PAD * 2;
 const contentH = ROWS * CARD + (ROWS - 1) * GAP + PAD * 2;
 
-// 网格步长 & 首格中心（画布坐标）
 const STEP_X = CARD + GAP;
 const STEP_Y = CARD + GAP;
-const BASE_X = PAD + CARD / 2; // 第1格中心x
-const BASE_Y = PAD + CARD / 2; // 第1格中心y
+const BASE_X = PAD + CARD / 2;
+const BASE_Y = PAD + CARD / 2;
 
-// 边界区间（画布相对容器的 translate 范围）
 const minX = Math.min(0, viewportW - contentW);
 const minY = Math.min(0, viewportH - contentH);
 const maxX = 0,
   maxY = 0;
+
+function snapToNearestBySearch(
+  xNow: number,
+  yNow: number,
+  viewportW: number,
+  viewportH: number,
+  cols: number,
+  rows: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
+) {
+  const Cx = viewportW / 2;
+  const Cy = viewportH / 2;
+
+  const centerInCanvasX = Cx - xNow;
+  const centerInCanvasY = Cy - yNow;
+
+  let bestCol = 0,
+    bestRow = 0,
+    bestD2 = Number.POSITIVE_INFINITY;
+  for (let r = 0; r < rows; r++) {
+    const cy = BASE_Y + r * STEP_Y;
+    for (let c = 0; c < cols; c++) {
+      const cx = BASE_X + c * STEP_X;
+      const dx = cx - centerInCanvasX;
+      const dy = cy - centerInCanvasY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bestCol = c;
+        bestRow = r;
+      }
+    }
+  }
+
+  const snappedCx = BASE_X + bestCol * STEP_X;
+  const snappedCy = BASE_Y + bestRow * STEP_Y;
+
+  let targetX = Cx - snappedCx;
+  let targetY = Cy - snappedCy;
+
+  targetX = Math.min(Math.max(targetX, minX), maxX);
+  targetY = Math.min(Math.max(targetY, minY), maxY);
+
+  return { targetX, targetY, bestCol: bestCol, bestRow: bestRow };
+}
 
 type CardProps = {
   col: number;
@@ -42,11 +87,13 @@ type CardProps = {
   BASE_Y: number;
   STEP_X: number;
   STEP_Y: number;
-  CARD: number;       // 传进来，别用外部闭包
-  COLS: number;       // 用于编号显示（row*COLS+col+1）
-  minScale?: number;  // 可调
-  maxScale?: number;  // 可调
+  CARD: number;
+  COLS: number;
+  minScale?: number;
+  maxScale?: number;
   children?: React.ReactNode;
+  centerX: number;
+  centerY: number;
 };
 const Card = ({
   col,
@@ -64,13 +111,15 @@ const Card = ({
   minScale = 0.85,
   maxScale = 1.20,
   children,
+  centerX,
+  centerY,
 }: CardProps) => {
-  // 这张卡片在“画布坐标系”的中心点（不随位移而变）
   const cardCX = BASE_X + col * STEP_X;
   const cardCY = BASE_Y + row * STEP_Y;
 
-  // 1) 跟踪距离比例的 MotionValue
-  const distanceRatio = useMotionValue(1);
+  const maxDist = Math.hypot(viewportW / 2, viewportH / 2);
+  const initialDist = Math.hypot(cardCX - centerX, cardCY - centerY);
+  const distanceRatio = useMotionValue(Math.min(initialDist / maxDist, 1));
 
   useEffect(() => {
     const maxDist = Math.hypot(viewportW / 2, viewportH / 2);
@@ -96,7 +145,6 @@ const Card = ({
     };
   }, [CARD, BASE_X, BASE_Y, STEP_X, STEP_Y, cardCX, cardCY, distanceRatio, viewportH, viewportW, x, y]);
 
-  // 2) 距离越小越靠近中心：scale 从 minScale → maxScale
   const scaleRaw = useTransform(distanceRatio, (v) => minScale + (maxScale - minScale) * (1 - v));
   const scale = useSpring(scaleRaw, { stiffness: 320, damping: 38, mass: 0.25 });
 
@@ -124,69 +172,31 @@ const Card = ({
 }
 
 export default function Plaza() {
-  // 位移
-  const x = useMotionValue(0);
-  const y = useMotionValue(0);
+  const initialSnap = useMemo(() => {
+    const snap = snapToNearestBySearch(
+      0,
+      0,
+      viewportW,
+      viewportH,
+      COLS,
+      ROWS,
+      minX,
+      maxX,
+      minY,
+      maxY
+    );
+    const centerX = viewportW / 2 - snap.targetX;
+    const centerY = viewportH / 2 - snap.targetY;
+    return { ...snap, centerX, centerY };
+  }, []);
 
-  // 传入当前 x/y（画布 translate）、返回“将最近格心对齐到视口中心”的目标位移
-  function snapToNearestBySearch(
-    xNow: number,
-    yNow: number,
-    viewportW: number,
-    viewportH: number,
-    cols: number,
-    rows: number,
-    minX: number,
-    maxX: number,
-    minY: number,
-    maxY: number
-  ) {
-    const Cx = viewportW / 2;
-    const Cy = viewportH / 2;
-
-    // 视口中心在“画布坐标系”下的位置
-    const centerInCanvasX = Cx - xNow;
-    const centerInCanvasY = Cy - yNow;
-
-    // 穷举所有格心，找最近
-    let bestCol = 0,
-      bestRow = 0,
-      bestD2 = Number.POSITIVE_INFINITY;
-    for (let r = 0; r < rows; r++) {
-      const cy = BASE_Y + r * STEP_Y;
-      for (let c = 0; c < cols; c++) {
-        const cx = BASE_X + c * STEP_X;
-        const dx = cx - centerInCanvasX;
-        const dy = cy - centerInCanvasY;
-        const d2 = dx * dx + dy * dy; // 用平方距离避免开方
-        if (d2 < bestD2) {
-          bestD2 = d2;
-          bestCol = c;
-          bestRow = r;
-        }
-      }
-    }
-
-    // 最近格心（画布坐标）
-    const snappedCx = BASE_X + bestCol * STEP_X;
-    const snappedCy = BASE_Y + bestRow * STEP_Y;
-
-    // 让该格心对齐到视口中心 → 需要的画布 translate
-    let targetX = Cx - snappedCx;
-    let targetY = Cy - snappedCy;
-
-    // 边界夹取（防止不可达）
-    targetX = Math.min(Math.max(targetX, minX), maxX);
-    targetY = Math.min(Math.max(targetY, minY), maxY);
-
-    return { targetX, targetY, bestCol, bestRow };
-  }
+  const x = useMotionValue(initialSnap.targetX);
+  const y = useMotionValue(initialSnap.targetY);
 
   function settleToNearest(xNow: number, yNow: number) {
     if (settledRef.current) return;
     settledRef.current = true;
 
-    // 停掉两轴惯性，防止抢位置
     axCtrlRef.current?.stop();
     ayCtrlRef.current?.stop();
 
@@ -203,37 +213,28 @@ export default function Plaza() {
       maxY
     );
 
-    // 同时开两条 spring（同一时刻发出）
     animate(x, targetX, SPRING);
     animate(y, targetY, SPRING);
   }
 
-  // 工具
-  // const clamp = (v: number, min: number, max: number) =>
-  //   Math.min(Math.max(v, min), max);
   const rubber = (delta: number, overflow: number, constant = 0.15) =>
     delta / (1 + overflow * constant);
 
-  // 动画控制句柄（用于 stop）
   const axCtrlRef = useRef<ReturnType<typeof animate> | null>(null);
   const ayCtrlRef = useRef<ReturnType<typeof animate> | null>(null);
-  // 是否已 settled，防止重复 settle
   const settledRef = useRef(false);
 
-  // 参数（可按需微调）
-  const SPEED_MIN = 100; // 低速阈值（px/s），低于它直接回弹
-  const EPS_DELTA = 1; // 越界早停阈值：本帧位移小于它就视为“已停”
+  const SPEED_MIN = 100;
+  const EPS_DELTA = 1;
   const SPRING = { type: "spring" as const, stiffness: 500, damping: 40 };
   const INERTIA = { type: "inertia" as const, power: 0.5, timeConstant: 350 };
 
-  // 新手势开始：停掉未完成惯性，保证跟手
   const onPanStart = () => {
     axCtrlRef.current?.stop();
     ayCtrlRef.current?.stop();
     settledRef.current = false;
   };
 
-  // 拖拽阶段：rubber 软边界
   const onPan = (_: any, info: { delta: { x: number; y: number } }) => {
     let nextX = x.get() + info.delta.x;
     let nextY = y.get() + info.delta.y;
@@ -256,11 +257,9 @@ export default function Plaza() {
     y.set(nextY);
   };
 
-  // 松手：惯性（软夹）+ 越界早停 + 回弹
   const onPanEnd = (_: any, info: { velocity: { x: number; y: number } }) => {
     const vx = info.velocity.x;
     const vy = info.velocity.y;
-    // 低速：直接联合吸附（一次性给出 x/y 目标）
     if (Math.hypot(vx, vy) < SPEED_MIN) {
       settleToNearest(x.get(), y.get());
       return;
@@ -269,7 +268,6 @@ export default function Plaza() {
     const targetX = x.get() + vx * 0.5;
     const targetY = y.get() + vy * 0.5;
 
-    // —— X 轴惯性：软夹 + 早停 —— //
     axCtrlRef.current = animate(x, targetX, {
       ...INERTIA,
       onUpdate: (v) => {
@@ -281,7 +279,6 @@ export default function Plaza() {
           const delta = v - last;
           const next = last + rubber(delta, overflow);
           if (Math.abs(next - last) < EPS_DELTA) {
-            // 提前终结惯性，联合吸附
             settleToNearest(next, y.get());
           } else {
             x.set(next);
@@ -292,7 +289,6 @@ export default function Plaza() {
       },
     });
 
-    // —— Y 轴惯性：软夹 + 早停 —— //
     ayCtrlRef.current = animate(y, targetY, {
       ...INERTIA,
       onUpdate: (v) => {
@@ -303,14 +299,7 @@ export default function Plaza() {
           const last = y.get();
           const delta = v - last;
           const next = last + rubber(delta, overflow);
-          // if (Math.abs(next - last) < EPS_DELTA) {
-          //   ayCtrlRef.current?.stop();
-          //   animate(y, clamp(next, minY, maxY), SPRING);
-          // } else {
-          //   y.set(next);
-          // }
           if (Math.abs(next - last) < EPS_DELTA) {
-            // 提前终结惯性，联合吸附
             settleToNearest(x.get(), next);
           } else {
             y.set(next);
@@ -321,7 +310,6 @@ export default function Plaza() {
       },
     });
 
-    // 兜底，如果都没触发早停，则联合吸附
     Promise.all([
       axCtrlRef.current!.finished,
       ayCtrlRef.current!.finished,
@@ -331,6 +319,24 @@ export default function Plaza() {
       }
     });
   };
+
+  useEffect(() => {
+    const { targetX, targetY } = snapToNearestBySearch(
+      x.get(),
+      y.get(),
+      viewportW,
+      viewportH,
+      COLS,
+      ROWS,
+      minX,
+      maxX,
+      minY,
+      maxY
+    );
+    x.set(targetX);
+    y.set(targetY);
+    settledRef.current = true;
+  }, [x, y]);
 
   return (
     <motion.div
@@ -381,6 +387,8 @@ export default function Plaza() {
             COLS={COLS}
             minScale={0.75}
             maxScale={1.10}
+        centerX={initialSnap.centerX}
+        centerY={initialSnap.centerY}
           >
             {i + 1}
           </Card>

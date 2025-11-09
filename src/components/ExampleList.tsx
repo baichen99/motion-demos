@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { Example } from '../types'
 import Tabs from './Tabs'
-import { getCategoryLabel, getAllCategories, examplesByCategory } from '../examples'
+import { examplesByCategory, getAllCategories, getCategoryLabel } from '../examples'
+import { useLocale } from '../i18n/LocaleContext'
 
 interface ExampleListProps {
   examples: Example[]
@@ -10,10 +11,10 @@ interface ExampleListProps {
 }
 
 export default function ExampleList({ examples, selectedId, onSelect }: ExampleListProps) {
+  const { t, locale } = useLocale()
   const categories = getAllCategories()
   const [activeCategory, setActiveCategory] = useState<string>('all')
 
-  // 当前分类的示例列表
   const currentExamples = useMemo(() => {
     if (activeCategory === 'all') {
       return examples
@@ -21,82 +22,69 @@ export default function ExampleList({ examples, selectedId, onSelect }: ExampleL
     return examplesByCategory[activeCategory] || []
   }, [activeCategory, examples])
 
-  // 构建 Tab 列表
   const tabs = useMemo(() => {
     return [
-      { id: 'all', label: '全部' },
+      { id: 'all', label: t('tabs.all') },
       ...categories.map(cat => ({
         id: cat,
-        label: getCategoryLabel(cat)
-      }))
+        label: getCategoryLabel(cat, locale),
+      })),
     ]
-  }, [categories])
+  }, [categories, locale, t])
 
   return (
-    <div style={{ 
-      width: '300px', 
-      borderRight: '1px solid #e0e0e0',
-      padding: '20px',
-      overflowY: 'auto',
-      height: '100vh',
-      backgroundColor: '#f9f9f9',
-      display: 'flex',
-      flexDirection: 'column',
-    }}>
-      <h1 style={{ marginTop: 0, marginBottom: '20px', fontSize: '24px' }}>
-        Motion 示例
-      </h1>
-      
-      <Tabs 
-        tabs={tabs}
-        activeTab={activeCategory === 'all' ? 'all' : activeCategory}
-        onTabChange={(tabId) => {
-          setActiveCategory(tabId === 'all' ? 'all' : tabId)
-        }}
-      />
+    <aside className="flex min-h-screen w-72 flex-col border-r border-slate-200 bg-white/90 pt-16 backdrop-blur">
+      <div className="px-6">
+        <h1 className="text-2xl font-semibold text-slate-900">{t('list.title')}</h1>
+      </div>
 
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div className="mt-6 px-4">
+        <Tabs
+          tabs={tabs}
+          activeTab={activeCategory === 'all' ? 'all' : activeCategory}
+          onTabChange={tabId => {
+            setActiveCategory(tabId === 'all' ? 'all' : tabId)
+          }}
+        />
+      </div>
+
+      <div className="mt-4 flex-1 overflow-y-auto px-4 pb-8">
         {currentExamples.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#999', padding: '20px' }}>
-            暂无示例
+          <div className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
+            {t('tabs.empty')}
           </div>
         ) : (
-          currentExamples.map((example) => (
-            <div
-              key={example.id}
-              onClick={() => onSelect(example.id)}
-              style={{
-                padding: '12px',
-                marginBottom: '8px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                backgroundColor: selectedId === example.id ? '#646cff' : '#fff',
-                color: selectedId === example.id ? '#fff' : '#333',
-                border: selectedId === example.id ? 'none' : '1px solid #e0e0e0',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                if (selectedId !== example.id) {
-                  e.currentTarget.style.backgroundColor = '#f0f0f0'
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (selectedId !== example.id) {
-                  e.currentTarget.style.backgroundColor = '#fff'
-                }
-              }}
-            >
-              <div style={{ fontWeight: '500', marginBottom: '4px' }}>
-                {example.title}
-              </div>
-              <div style={{ fontSize: '12px', opacity: 0.8 }}>
-                {example.description}
-              </div>
-            </div>
-          ))
+          <div className="space-y-3">
+            {currentExamples.map(example => {
+              const isActive = selectedId === example.id
+              const title = example.titles?.[locale] ?? example.title
+              const description = example.descriptions?.[locale] ?? example.description
+              return (
+                <button
+                  key={example.id}
+                  type="button"
+                  onClick={() => onSelect(example.id)}
+                  className={`w-full rounded-xl border px-4 py-3 text-left transition-colors ${
+                    isActive
+                      ? 'border-slate-800 bg-slate-900 text-white shadow-sm'
+                      : 'border-transparent bg-white text-slate-900 shadow-sm hover:border-slate-200'
+                  }`}
+                >
+                  <div className="text-sm font-semibold">{title}</div>
+                  <div
+                    className={`mt-1 text-xs ${
+                      isActive ? 'text-slate-200' : 'text-slate-500'
+                    }`}
+                  >
+                    {description}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         )}
       </div>
-    </div>
+    </aside>
   )
 }
 
